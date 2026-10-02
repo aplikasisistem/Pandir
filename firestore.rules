@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function for ID verification
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Healthcheck / connection testing
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Koleksi Akun Game Toko (akun_toko_game) - Real-Time Multi-Device
+    match /akun_toko_game/{accountId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(accountId);
+    }
+
+    // Koleksi Catatan Penjualan (catatan_penjualan) - Real-Time Multi-Device
+    match /catatan_penjualan/{saleId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(saleId);
+    }
+
+    // Kompatibilitas koleksi terdahulu
+    match /gamestore_accounts/{accountId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(accountId);
+    }
+
+    match /sales_records/{saleId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(saleId);
+    }
+  }
+}
