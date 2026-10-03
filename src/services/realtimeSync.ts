@@ -31,8 +31,10 @@ class RealtimeSyncService {
   private currentMode: SyncMode = 'firebase';
   private currentAccounts: GameAccount[] = [];
   private currentSales: SaleRecord[] = [];
-  private isSeedingAccounts = false;
-  private hasAttemptedMigration = false;
+  private isUploadingSales = false;
+  private isUploadingAccounts = false;
+  private hasInitialAccountsSync = false;
+  private hasInitialSalesSync = false;
   public isConnected = false;
 
   constructor() {
@@ -50,7 +52,6 @@ class RealtimeSyncService {
       try {
         this.broadcastChannel = new BroadcastChannel('pandirstore_realtime_sync');
         this.broadcastChannel.onmessage = (event) => {
-          // Only use BroadcastChannel fallback if Firestore is currently disconnected
           if (!this.isConnected) {
             if (event.data?.type === 'ACCOUNTS_UPDATED' && Array.isArray(event.data.payload)) {
               this.currentAccounts = event.data.payload;
@@ -136,14 +137,13 @@ class RealtimeSyncService {
 
   /**
    * Initialize bidirectional real-time Firestore listeners.
-   * Any change made on any device triggers onSnapshot within milliseconds.
+   * Any change made on HP or PC triggers onSnapshot on all other devices in milliseconds.
    */
   private initFirestoreSync() {
     try {
       const accountsCol = collection(db, ACCOUNTS_COLLECTION);
       const salesCol = collection(db, SALES_COLLECTION);
 
-      // Clean up previous listeners if any
       if (this.unsubscribeFirestoreAccounts) {
         this.unsubscribeFirestoreAccounts();
         this.unsubscribeFirestoreAccounts = null;
@@ -162,33 +162,48 @@ class RealtimeSyncService {
 
           if (!snapshot.empty) {
             const remoteAccounts: GameAccount[] = [];
+            const remoteMap = new Map<string, GameAccount>();
+
             snapshot.forEach((docSnap) => {
               const data = docSnap.data() as GameAccount;
               if (data && data.id) {
                 remoteAccounts.push(data);
+                remoteMap.set(data.id, data);
               }
             });
 
-            // Sort newest first based on createdAt
-            remoteAccounts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            // Reconcile: If local device has unsaved accounts not in Firestore, auto-upload them
+            const unsyncedLocal = this.currentAccounts.filter((a) => a.id && !remoteMap.has(a.id));
+            if (unsyncedLocal.length > 0 && !this.isUploadingAccounts) {
+              this.uploadUnsyncedAccounts(unsyncedLocal);
+            }
 
-            this.currentAccounts = remoteAccounts;
-            this.saveToLocalStorage(remoteAccounts, false);
-            this.notifyListeners(remoteAccounts);
+            // Combine remote accounts and any unsynced local accounts
+            const merged = [...remoteAccounts];
+            for (const localAcc of unsyncedLocal) {
+              if (!remoteMap.has(localAcc.id)) {
+                merged.push(localAcc);
+              }
+            }
+
+            merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            this.currentAccounts = merged;
+            this.saveToLocalStorage(merged, false);
+            this.notifyListeners(merged);
           } else {
-            // Firestore collection is empty. Check once if migration is needed, without looping.
-            if (!this.hasAttemptedMigration && !this.isSeedingAccounts) {
-              this.hasAttemptedMigration = true;
-              await this.checkAndMigrateLegacyAccounts();
-            } else {
-              this.currentAccounts = [];
-              this.saveToLocalStorage([], false);
-              this.notifyListeners([]);
+            // Remote Firestore collection is empty:
+            // If local storage has accounts, automatically upload them to Cloud Firestore!
+            if (this.currentAccounts.length > 0 && !this.hasInitialAccountsSync && !this.isUploadingAccounts) {
+              this.hasInitialAccountsSync = true;
+              this.uploadUnsyncedAccounts(this.currentAccounts);
+            } else if (!this.hasInitialAccountsSync) {
+              this.hasInitialAccountsSync = true;
+              this.checkAndMigrateLegacyAccounts();
             }
           }
         },
         (error) => {
-          console.warn('Firestore onSnapshot accounts listener fallback:', error.message);
+          console.warn('Firestore onSnapshot accounts error, using cache:', error.message);
           this.currentMode = 'broadcast';
           this.isConnected = false;
         }
@@ -197,28 +212,57 @@ class RealtimeSyncService {
       // 2. Real-Time Sales Ledger Listener (catatan_penjualan)
       this.unsubscribeFirestoreSales = onSnapshot(
         salesCol,
-        (snapshot) => {
+        async (snapshot) => {
+          this.isConnected = true;
+          this.currentMode = 'firebase';
+
           if (!snapshot.empty) {
             const remoteSales: SaleRecord[] = [];
+            const remoteMap = new Map<string, SaleRecord>();
+
             snapshot.forEach((docSnap) => {
               const data = docSnap.data() as SaleRecord;
               if (data && data.id) {
                 remoteSales.push(data);
+                remoteMap.set(data.id, data);
               }
             });
 
-            remoteSales.sort((a, b) => (b.date || 0) - (a.date || 0));
-            this.currentSales = remoteSales;
-            this.saveSalesToLocalStorage(remoteSales, false);
-            this.notifySalesListeners(remoteSales);
+            // Reconcile: If local device has sales records (e.g. input on HP) not yet in cloud, auto-upload!
+            const unsyncedSales = this.currentSales.filter((s) => s.id && !remoteMap.has(s.id));
+            if (unsyncedSales.length > 0 && !this.isUploadingSales) {
+              this.uploadUnsyncedSales(unsyncedSales);
+            }
+
+            // Combine remote sales and any unsynced local sales
+            const merged = [...remoteSales];
+            for (const localSale of unsyncedSales) {
+              if (!remoteMap.has(localSale.id)) {
+                merged.push(localSale);
+              }
+            }
+
+            merged.sort((a, b) => (b.date || 0) - (a.date || 0));
+            this.currentSales = merged;
+            this.saveSalesToLocalStorage(merged, false);
+            this.notifySalesListeners(merged);
           } else {
-            this.currentSales = [];
-            this.saveSalesToLocalStorage([], false);
-            this.notifySalesListeners([]);
+            // Remote collection is empty:
+            // CRITICAL FIX: If this device (HP) already has sales in localStorage, AUTO-UPLOAD to Cloud!
+            // NEVER wipe out to empty array if localStorage has records!
+            if (this.currentSales.length > 0 && !this.hasInitialSalesSync && !this.isUploadingSales) {
+              this.hasInitialSalesSync = true;
+              this.uploadUnsyncedSales(this.currentSales);
+            } else {
+              this.hasInitialSalesSync = true;
+              if (this.currentSales.length === 0) {
+                this.notifySalesListeners([]);
+              }
+            }
           }
         },
         (error) => {
-          console.warn('Firestore onSnapshot sales listener fallback:', error.message);
+          console.warn('Firestore onSnapshot sales error, using cache:', error.message);
         }
       );
     } catch (err) {
@@ -229,67 +273,104 @@ class RealtimeSyncService {
   }
 
   /**
-   * One-time check for legacy collections to prevent data loss.
+   * Automatically pushes local accounts that are missing from Cloud Firestore.
    */
-  private async checkAndMigrateLegacyAccounts() {
-    if (this.isSeedingAccounts) return;
-    this.isSeedingAccounts = true;
+  private async uploadUnsyncedAccounts(accountsToUpload: GameAccount[]) {
+    if (this.isUploadingAccounts || accountsToUpload.length === 0) return;
+    this.isUploadingAccounts = true;
 
     try {
-      let seedSource = INITIAL_ACCOUNTS;
-      try {
-        const legacySnap = await getDocs(collection(db, 'gamestore_accounts'));
-        if (!legacySnap.empty) {
-          const legacyAccounts: GameAccount[] = [];
-          legacySnap.forEach((d) => {
-            const item = d.data() as GameAccount;
-            if (item && item.id) legacyAccounts.push(item);
-          });
-          if (legacyAccounts.length > 0) {
-            seedSource = legacyAccounts;
-          }
-        }
-      } catch {
-        // Fallback to INITIAL_ACCOUNTS
+      const batch = writeBatch(db);
+      for (const acc of accountsToUpload) {
+        if (!acc.id) continue;
+        const docRef = doc(db, ACCOUNTS_COLLECTION, acc.id);
+        batch.set(docRef, acc, { merge: true });
       }
-
-      if (seedSource.length > 0) {
-        const batch = writeBatch(db);
-        for (const acc of seedSource) {
-          const docRef = doc(db, ACCOUNTS_COLLECTION, acc.id);
-          batch.set(docRef, acc);
-        }
-        await batch.commit();
-      } else {
-        this.currentAccounts = [];
-        this.saveToLocalStorage([], false);
-        this.notifyListeners([]);
-      }
-    } catch (e) {
-      console.warn('Initial migration check completed with warning:', e);
+      await batch.commit();
+      console.log(`Auto-synced ${accountsToUpload.length} accounts to Cloud Firestore.`);
+    } catch (err) {
+      console.warn('Auto-sync accounts to cloud warning:', err);
     } finally {
-      this.isSeedingAccounts = false;
+      this.isUploadingAccounts = false;
     }
   }
 
-  public getSyncStatus(): { mode: SyncMode; label: string; active: boolean } {
+  /**
+   * Automatically pushes local sales records (e.g. from HP) to Cloud Firestore.
+   */
+  private async uploadUnsyncedSales(salesToUpload: SaleRecord[]) {
+    if (this.isUploadingSales || salesToUpload.length === 0) return;
+    this.isUploadingSales = true;
+
+    try {
+      const batch = writeBatch(db);
+      for (const sale of salesToUpload) {
+        if (!sale.id) continue;
+        const docRef = doc(db, SALES_COLLECTION, sale.id);
+        batch.set(docRef, sale, { merge: true });
+      }
+      await batch.commit();
+      console.log(`Auto-synced ${salesToUpload.length} sales records to Cloud Firestore.`);
+    } catch (err) {
+      console.warn('Auto-sync sales to cloud warning:', err);
+    } finally {
+      this.isUploadingSales = false;
+    }
+  }
+
+  /**
+   * One-time check for legacy collections to prevent data loss.
+   */
+  private async checkAndMigrateLegacyAccounts() {
+    try {
+      const legacySnap = await getDocs(collection(db, 'gamestore_accounts'));
+      if (!legacySnap.empty) {
+        const legacyAccounts: GameAccount[] = [];
+        legacySnap.forEach((d) => {
+          const item = d.data() as GameAccount;
+          if (item && item.id) legacyAccounts.push(item);
+        });
+        if (legacyAccounts.length > 0) {
+          const batch = writeBatch(db);
+          for (const acc of legacyAccounts) {
+            const docRef = doc(db, ACCOUNTS_COLLECTION, acc.id);
+            batch.set(docRef, acc);
+          }
+          await batch.commit();
+        }
+      }
+    } catch (e) {
+      console.warn('Initial legacy check completed with notice:', e);
+    }
+  }
+
+  public getSyncStatus(): {
+    mode: SyncMode;
+    label: string;
+    active: boolean;
+    accountsCount: number;
+    salesCount: number;
+  } {
     if (this.currentMode === 'firebase' || this.isConnected) {
       return {
         mode: 'firebase',
         label: 'Google Cloud Firestore Real-Time Active (Multi-Device Terhubung)',
         active: true,
+        accountsCount: this.currentAccounts.length,
+        salesCount: this.currentSales.length,
       };
     }
     return {
       mode: 'broadcast',
-      label: 'Local & BroadcastChannel Real-Time (Fallback)',
+      label: 'Local & BroadcastChannel Real-Time (Fallback Offline)',
       active: true,
+      accountsCount: this.currentAccounts.length,
+      salesCount: this.currentSales.length,
     };
   }
 
   public subscribe(listener: AccountsListener): () => void {
     this.listeners.add(listener);
-    // Immediately supply current state to new subscriber
     listener([...this.currentAccounts]);
     return () => {
       this.listeners.delete(listener);
@@ -371,7 +452,6 @@ class RealtimeSyncService {
       updatedAt: Date.now(),
     };
 
-    // Optimistic local update
     const updatedList = this.currentAccounts.map((a) => (a.id === updated.id ? updated : a));
     this.currentAccounts = updatedList;
     this.saveToLocalStorage(updatedList, false);
@@ -428,7 +508,6 @@ class RealtimeSyncService {
    * Immediately removes it from all active users' catalog in real-time.
    */
   public async deleteAccount(id: string): Promise<boolean> {
-    // Optimistic local update
     const updatedList = this.currentAccounts.filter((a) => a.id !== id);
     this.currentAccounts = updatedList;
     this.saveToLocalStorage(updatedList, false);
@@ -446,12 +525,14 @@ class RealtimeSyncService {
 
   /**
    * Adds a transaction record to Firestore 'catatan_penjualan'.
+   * Real-time listeners on PC & HP will update automatically.
    */
   public async addSaleRecord(record: Omit<SaleRecord, 'id'>): Promise<SaleRecord> {
     const newRecord: SaleRecord = {
       ...record,
       id: `TRX-${Date.now().toString().slice(-6)}`,
     };
+
     const updated = [newRecord, ...this.currentSales.filter((s) => s.id !== newRecord.id)];
     this.currentSales = updated;
     this.saveSalesToLocalStorage(updated, false);
@@ -461,9 +542,67 @@ class RealtimeSyncService {
       await setDoc(doc(db, SALES_COLLECTION, newRecord.id), newRecord);
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `${SALES_COLLECTION}/${newRecord.id}`);
+      throw e;
     }
 
     return newRecord;
+  }
+
+  /**
+   * Deletes a sale record from Firestore.
+   */
+  public async deleteSaleRecord(id: string): Promise<boolean> {
+    const updated = this.currentSales.filter((s) => s.id !== id);
+    this.currentSales = updated;
+    this.saveSalesToLocalStorage(updated, false);
+    this.notifySalesListeners(updated);
+
+    try {
+      await deleteDoc(doc(db, SALES_COLLECTION, id));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `${SALES_COLLECTION}/${id}`);
+      throw e;
+    }
+
+    return true;
+  }
+
+  /**
+   * Manually or automatically trigger full sync from local storage to cloud.
+   * Ensures any data on HP is completely uploaded to Cloud Firestore so PC sees it.
+   */
+  public async syncLocalToCloudNow(): Promise<{ accountsSynced: number; salesSynced: number }> {
+    let accountsSynced = 0;
+    let salesSynced = 0;
+
+    try {
+      if (this.currentAccounts.length > 0) {
+        const batch = writeBatch(db);
+        for (const acc of this.currentAccounts) {
+          if (acc.id) {
+            batch.set(doc(db, ACCOUNTS_COLLECTION, acc.id), acc, { merge: true });
+            accountsSynced++;
+          }
+        }
+        await batch.commit();
+      }
+
+      if (this.currentSales.length > 0) {
+        const batchSales = writeBatch(db);
+        for (const sale of this.currentSales) {
+          if (sale.id) {
+            batchSales.set(doc(db, SALES_COLLECTION, sale.id), sale, { merge: true });
+            salesSynced++;
+          }
+        }
+        await batchSales.commit();
+      }
+    } catch (e) {
+      console.error('Error during manual syncLocalToCloudNow:', e);
+      throw e;
+    }
+
+    return { accountsSynced, salesSynced };
   }
 }
 

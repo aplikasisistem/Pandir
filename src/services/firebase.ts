@@ -3,11 +3,27 @@ import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+// Support Netlify / Custom environment variables with fallback to bundled config
+const activeFirebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
+};
+
+// Target database ID (critical for AI Studio provisioned Firestore)
+const databaseId =
+  import.meta.env.VITE_FIREBASE_DATABASE_ID ||
+  (firebaseConfig as any).firestoreDatabaseId ||
+  '(default)';
+
 // Initialize Firebase App
-export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+export const app = getApps().length === 0 ? initializeApp(activeFirebaseConfig) : getApp();
 
 // CRITICAL: Must pass firestoreDatabaseId for AI Studio provisioned Firestore
-export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || '(default)');
+export const db = getFirestore(app, databaseId);
 export const auth = getAuth(app);
 
 // Firestore Error Handler conforming to AI Studio error specification

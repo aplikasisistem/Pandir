@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { GameAccount, FilterState, GameType } from './types';
+import { GameAccount, FilterState, GameType, SaleRecord } from './types';
 import { realtimeSync } from './services/realtimeSync';
 import { Navbar } from './components/Navbar';
 import { HeroBanner } from './components/HeroBanner';
@@ -21,8 +21,9 @@ import { useToast } from './context/ToastContext';
 
 export default function App() {
   const { showToast } = useToast();
-  // Accounts state synced real-time from database service
+  // Accounts and sales state synced real-time from database service
   const [accounts, setAccounts] = useState<GameAccount[]>([]);
+  const [salesRecords, setSalesRecords] = useState<SaleRecord[]>([]);
   const [isSellerAuthenticated, setIsSellerAuthenticated] = useState<boolean>(false);
   const [currentView, setCurrentView] = useState<'buyer' | 'seller'>('buyer');
 
@@ -51,8 +52,12 @@ export default function App() {
 
   // Subscribe to Realtime Database / Multi-Device updates on mount
   useEffect(() => {
-    const unsubscribe = realtimeSync.subscribe((latestAccounts) => {
+    const unsubscribeAccounts = realtimeSync.subscribe((latestAccounts) => {
       setAccounts(latestAccounts);
+    });
+
+    const unsubscribeSales = realtimeSync.subscribeSales((latestSales) => {
+      setSalesRecords(latestSales);
     });
 
     // Check saved seller auth session in session storage
@@ -64,7 +69,8 @@ export default function App() {
     }
 
     return () => {
-      unsubscribe();
+      unsubscribeAccounts();
+      unsubscribeSales();
     };
   }, []);
 
@@ -221,6 +227,7 @@ export default function App() {
       <>
         <SellerDashboard
           accounts={accounts}
+          salesRecords={salesRecords}
           onBackToKatalog={() => setCurrentView('buyer')}
           onLogout={handleSellerLogout}
           onAddNewAccount={handleOpenAddAccount}

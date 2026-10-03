@@ -21,12 +21,17 @@ import {
   RefreshCw,
   Clock,
   ChevronDown,
+  Plus,
+  Trash2,
+  CloudUpload,
+  X,
 } from 'lucide-react';
-import { GameAccount, SaleRecord } from '../types';
+import { GameAccount, SaleRecord, GameType } from '../types';
 import { realtimeSync } from '../services/realtimeSync';
 import { formatRupiah, formatNumber } from '../utils/formatter';
 import { MLBBLogo, FreeFireLogo } from './GameBadges';
 import { PandirStoreEmblem } from './PandirStoreLogo';
+import { useToast } from '../context/ToastContext';
 
 export type AdminDateRange = 'daily' | 'weekly' | 'monthly' | 'all' | 'custom';
 
@@ -43,23 +48,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   initialSalesRecords,
   onBackToKatalog,
 }) => {
-  // Real-time state fetched directly from the database service
-  const [accounts, setAccounts] = useState<GameAccount[]>(
-    initialAccounts || realtimeSync.getAccounts()
-  );
-  const [salesRecords, setSalesRecords] = useState<SaleRecord[]>(
-    initialSalesRecords || realtimeSync.getSalesRecords()
-  );
+  const { showToast } = useToast();
+
+  // Real-time state fetched directly from the database service with proper fallback
+  const [accounts, setAccounts] = useState<GameAccount[]>(() => {
+    if (initialAccounts && initialAccounts.length > 0) return initialAccounts;
+    return realtimeSync.getAccounts();
+  });
+  const [salesRecords, setSalesRecords] = useState<SaleRecord[]>(() => {
+    if (initialSalesRecords && initialSalesRecords.length > 0) return initialSalesRecords;
+    return realtimeSync.getSalesRecords();
+  });
+
   const [isLoading, setIsLoading] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
-  // Filters
-  const [dateRange, setDateRange] = useState<AdminDateRange>('monthly');
+  // Default dateRange to 'all' so no transactions are hidden by arbitrary 30-day window
+  const [dateRange, setDateRange] = useState<AdminDateRange>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [selectedGame, setSelectedGame] = useState<'ALL' | 'MLBB' | 'FREE_FIRE'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'all_accounts' | 'sales_ledger'>('all_accounts');
+  
+  // Default activeTab to 'sales_ledger' if sales exist
+  const [activeTab, setActiveTab] = useState<'all_accounts' | 'sales_ledger'>(() => {
+    const currentSales = initialSalesRecords || realtimeSync.getSalesRecords();
+    return currentSales.length > 0 ? 'sales_ledger' : 'sales_ledger';
+  });
+
+  // Modal manual input transaksi penjualan baru
+  const [isAddSaleModalOpen, setIsAddSaleModalOpen] = useState(false);
+  const [newSaleGame, setNewSaleGame] = useState<GameType>('MLBB');
+  const [newSaleTitle, setNewSaleTitle] = useState('');
+  const [newSaleId, setNewSaleId] = useState('');
+  const [newSaleSellingPrice, setNewSaleSellingPrice] = useState('');
+  const [newSaleCostPrice, setNewSaleCostPrice] = useState('');
+  const [newSaleBuyerNote, setNewSaleBuyerNote] = useState('');
+
+  // Sync prop changes
+  useEffect(() => {
+    if (initialAccounts && initialAccounts.length > 0) {
+      setAccounts(initialAccounts);
+    }
+  }, [initialAccounts]);
+
+  useEffect(() => {
+    if (initialSalesRecords && initialSalesRecords.length > 0) {
+      setSalesRecords(initialSalesRecords);
+    }
+  }, [initialSalesRecords]);
 
   // Subscribe directly to real-time database updates
   useEffect(() => {
@@ -166,17 +204,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Real-Time Financial Calculations:
   // 1. Total Revenue = Sum(Harga Jual * Jumlah Terjual)
   const totalRevenue = useMemo(() => {
-    // Calculated across filtered accounts based on soldCount and selling price
     const fromAccounts = filteredAccounts.reduce((sum, acc) => {
       const units = acc.soldCount || (acc.status === 'SOLD_OUT' ? 1 : 0);
       return sum + acc.price * units;
     }, 0);
 
-    // If sales records exist in this period, we incorporate their direct ledger revenue
     const fromSalesLedger = filteredSales.reduce((sum, s) => sum + s.sellingPrice, 0);
 
+    if (activeTab === 'sales_ledger') {
+      return fromSalesLedger;
+    }
+    if (activeTab === 'all_accounts') {
+      return fromAccounts > 0 ? fromAccounts : fromSalesLedger;
+    }
     return Math.max(fromAccounts, fromSalesLedger);
-  }, [filteredAccounts, filteredSales]);
+  }, [filteredAccounts, filteredSales, activeTab]);
 
   // 2. Total Costs (COGS / Harga Beli Modal) = Sum(Harga Modal * Jumlah Terjual)
   const totalCOGS = useMemo(() => {
@@ -188,14 +230,118 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     const fromSalesLedger = filteredSales.reduce((sum, s) => sum + s.costPrice, 0);
 
+    if (activeTab === 'sales_ledger') {
+      return fromSalesLedger;
+    }
+    if (activeTab === 'all_accounts') {
+      return fromAccounts > 0 ? fromAccounts : fromSalesLedger;
+    }
     return Math.max(fromAccounts, fromSalesLedger);
-  }, [filteredAccounts, filteredSales]);
+  }, [filteredAccounts, filteredSales, activeTab]);
 
   // 3. Net Profit = Total Revenue - Total COGS
   const netProfit = totalRevenue - totalCOGS;
 
   // 4. Net Profit Margin (%) = (Net Profit / Total Revenue) * 100
   const profitMarginPercent = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0.0';
+
+  // Handler simpan transaksi penjualan baru
+  const handleSaveManualSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const sellingPrice = parseInt(newSaleSellingPrice.replace(/\D/g, '') || '0', 10);
+    const costPrice = parseInt(newSaleCostPrice.replace(/\D/g, '') || '0', 10);
+
+    if (!newSaleTitle.trim()) {
+      showToast({
+        type: 'info',
+        title: 'Form Belum Lengkap',
+        message: 'Mohon isi judul atau deskripsi akun yang terjual.',
+      });
+      return;
+    }
+    if (sellingPrice <= 0) {
+      showToast({
+        type: 'info',
+        title: 'Harga Jual Tidak Valid',
+        message: 'Mohon masukkan nominal harga jual yang benar.',
+      });
+      return;
+    }
+
+    try {
+      const created = await realtimeSync.addSaleRecord({
+        accountId: newSaleId.trim() || `ACC-${Date.now().toString().slice(-4)}`,
+        accountTitle: newSaleTitle.trim(),
+        game: newSaleGame,
+        sellingPrice,
+        costPrice,
+        profit: sellingPrice - costPrice,
+        date: Date.now(),
+        buyerNote: newSaleBuyerNote.trim() || 'Transaksi kasir manual direct WA',
+      });
+
+      showToast({
+        type: 'success',
+        title: 'Transaksi Berhasil Disimpan',
+        message: `Penjualan "${created.accountTitle}" tersimpan dan otomatis tersinkron ke semua perangkat.`,
+      });
+
+      setIsAddSaleModalOpen(false);
+      setNewSaleTitle('');
+      setNewSaleId('');
+      setNewSaleSellingPrice('');
+      setNewSaleCostPrice('');
+      setNewSaleBuyerNote('');
+      setActiveTab('sales_ledger');
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        title: 'Gagal Menyimpan',
+        message: err?.message || 'Gagal menyimpan transaksi ke Cloud Firestore.',
+      });
+    }
+  };
+
+  // Handler hapus transaksi penjualan
+  const handleDeleteSale = async (sale: SaleRecord) => {
+    if (window.confirm(`Hapus catatan transaksi ${sale.id} (${sale.accountTitle})?`)) {
+      try {
+        await realtimeSync.deleteSaleRecord(sale.id);
+        showToast({
+          type: 'info',
+          title: 'Transaksi Dihapus',
+          message: `Catatan transaksi ${sale.id} berhasil dihapus dari cloud.`,
+        });
+      } catch (err: any) {
+        showToast({
+          type: 'error',
+          title: 'Gagal Menghapus',
+          message: err?.message || 'Gagal menghapus transaksi.',
+        });
+      }
+    }
+  };
+
+  // Handler sync cloud instan (unggah data HP ke Cloud)
+  const handleSyncCloudNow = async () => {
+    setIsSyncingCloud(true);
+    try {
+      const res = await realtimeSync.syncLocalToCloudNow();
+      showToast({
+        type: 'success',
+        title: 'Sinkronisasi Multi-Device Berhasil!',
+        message: `Berhasil mengunggah ${res.salesSynced} transaksi penjualan & ${res.accountsSynced} data akun ke Google Cloud Firestore. Semua perangkat kini tersinkron!`,
+      });
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        title: 'Kendala Sinkronisasi',
+        message: err?.message || 'Gagal menghubungkan ke Cloud Firestore.',
+      });
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
 
   // 5. Active Inventory Assets Valuation
   const inventoryStats = useMemo(() => {
@@ -332,15 +478,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Action Export Buttons - Compact */}
-        <div className="flex items-center gap-2 print:hidden shrink-0">
+        {/* Action Export & Cloud Sync Buttons - Compact */}
+        <div className="flex flex-wrap items-center gap-2 print:hidden shrink-0">
+          <button
+            onClick={() => setIsAddSaleModalOpen(true)}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-bold shadow-md shadow-orange-950/40 active:scale-95 h-8 transition-all"
+            title="Catat transaksi penjualan kasir baru"
+          >
+            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span>+ Catat Penjualan</span>
+          </button>
+
+          <button
+            onClick={handleSyncCloudNow}
+            disabled={isSyncingCloud}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-950 hover:bg-blue-900 border border-blue-500/40 text-blue-300 text-xs font-semibold shadow-sm active:scale-95 h-8 transition-all disabled:opacity-60"
+            title="Unggah data transaksi dari HP ini ke Cloud Firestore agar langsung muncul di PC"
+          >
+            {isSyncingCloud ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400" />
+            ) : (
+              <CloudUpload className="w-3.5 h-3.5 text-blue-400" />
+            )}
+            <span>{isSyncingCloud ? 'Menyinkronkan...' : 'Sync Cloud (HP ➔ PC)'}</span>
+          </button>
+
           <button
             onClick={handleExportExcelCSV}
             className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-xs font-semibold transition-all shadow-sm active:scale-95 h-8"
             title="Download Laporan Format Excel / CSV"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Export CSV</span>
+            <span className="hidden sm:inline">Export</span> CSV
           </button>
 
           <button
@@ -349,7 +518,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             title="Cetak atau Simpan sebagai PDF"
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>Cetak PDF</span>
+            <span className="hidden sm:inline">Cetak</span> PDF
           </button>
         </div>
       </div>
@@ -764,7 +933,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </td>
 
                       <td className="py-3 px-3 sm:px-4 max-w-xs truncate font-medium text-slate-200">
-                        {sale.accountTitle}
+                        <div className="flex items-center gap-1.5">
+                          {sale.game === 'MLBB' ? (
+                            <MLBBLogo className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <FreeFireLogo className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span className="truncate">{sale.accountTitle}</span>
+                        </div>
                       </td>
 
                       <td className="py-3 px-3 sm:px-4 whitespace-nowrap">
@@ -785,10 +961,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         +{formatRupiah(sale.profit)}
                       </td>
 
-                      <td className="py-3 px-3 sm:px-4 text-center">
-                        <span className="px-2 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-300">
-                          {margin}%
-                        </span>
+                      <td className="py-3 px-3 sm:px-4 text-center whitespace-nowrap">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-300">
+                            {margin}%
+                          </span>
+                          <button
+                            onClick={() => handleDeleteSale(sale)}
+                            className="p-1 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-colors"
+                            title="Hapus transaksi ini"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -796,7 +981,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               ) : (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-slate-500">
-                    Belum ada riwayat transaksi penjualan dalam rentang waktu ini.
+                    <p className="mb-2">Belum ada riwayat transaksi penjualan dalam rentang waktu ini.</p>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddSaleModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 text-white text-xs font-bold shadow-md hover:bg-orange-500 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                      <span>Catat Transaksi Penjualan Baru</span>
+                    </button>
                   </td>
                 </tr>
               )}
@@ -824,6 +1017,148 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal Input Transaksi Penjualan Baru */}
+      {isAddSaleModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-orange-500/20 text-orange-400">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Catat Transaksi Penjualan Baru</h3>
+                  <p className="text-[11px] text-slate-400">Otomatis tersimpan &amp; real-time ke HP dan PC</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddSaleModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveManualSale} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Game</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewSaleGame('MLBB')}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                      newSaleGame === 'MLBB'
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    <MLBBLogo className="w-4 h-4" />
+                    <span>Mobile Legends</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewSaleGame('FREE_FIRE')}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                      newSaleGame === 'FREE_FIRE'
+                        ? 'bg-orange-600 text-white shadow-md'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    <FreeFireLogo className="w-4 h-4" />
+                    <span>Free Fire</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Judul Akun / Rincian Lapak <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: MLBB Mythic Glory 180 Skin Collector"
+                  value={newSaleTitle}
+                  onChange={(e) => setNewSaleTitle(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  ID Akun / Kode Lapak (Opsional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: ML-201 atau ID Akun"
+                  value={newSaleId}
+                  onChange={(e) => setNewSaleId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Harga Jual (Revenue) <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="Contoh: 500000"
+                    value={newSaleSellingPrice}
+                    onChange={(e) => setNewSaleSellingPrice(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-orange-400 font-bold font-mono placeholder-slate-500 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Harga Modal / Beli (COGS)
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="Contoh: 350000"
+                    value={newSaleCostPrice}
+                    onChange={(e) => setNewSaleCostPrice(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-amber-400 font-mono placeholder-slate-500 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Catatan Pembeli / Transaksi (Opsional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Direct WA Pembeli Depok"
+                  value={newSaleBuyerNote}
+                  onChange={(e) => setNewSaleBuyerNote(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddSaleModalOpen(false)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-bold transition-all shadow-md active:scale-95"
+                >
+                  Simpan Transaksi (Auto-Sync)
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
