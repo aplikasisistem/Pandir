@@ -805,7 +805,7 @@ class RealtimeSyncService {
     // Auto-actions when order is approved (PAID_APPROVED):
     if (status === 'PAID_APPROVED') {
       try {
-        const prodId = target.product_id || target.accountId;
+        const prodId = target.product_id || target.accountId || '';
         const matchingAccount = this.currentAccounts.find(
           (a) =>
             a.id === prodId ||
@@ -816,26 +816,20 @@ class RealtimeSyncService {
 
         // 1. Automatically change account status to SOLD_OUT
         if (matchingAccount && matchingAccount.status !== 'SOLD_OUT') {
-          await this.updateAccountStatus(matchingAccount.id, 'SOLD_OUT');
-        }
-
-        // 2. Automatically record in Buku Penjualan (Catatan Penjualan / Laba-Rugi)
-        const alreadyRecorded = this.currentSales.some(
-          (s) =>
-            (s.notes && s.notes.includes(key)) ||
-            (matchingAccount && s.accountTitle === matchingAccount.title && s.salePrice === (target.total_amount || target.amount))
-        );
-
-        if (!alreadyRecorded) {
-          const capital = matchingAccount?.costPrice || matchingAccount?.capitalPrice || Math.round((target.base_price || target.amount || 0) * 0.7);
-          const saleVal = target.total_amount || target.amount || (matchingAccount ? matchingAccount.price : 0);
+          await this.updateAccountStock(matchingAccount.id, 0, 'SOLD_OUT');
+        } else if (!matchingAccount) {
+          // If no matching catalog account found, record in Buku Penjualan directly
+          const cost = Math.round((target.base_price || target.amount || 0) * 0.7);
+          const selling = target.total_amount || target.amount || 0;
           await this.addSaleRecord({
-            game: target.game || matchingAccount?.game || 'MLBB',
-            accountTitle: target.product_title || matchingAccount?.title || target.accountTitle || 'Akun Game',
-            capitalPrice: capital,
-            salePrice: saleVal,
-            saleDate: new Date().toISOString().split('T')[0],
-            notes: `Auto-recorded dari Pesanan ${key} (${target.payment_method}) - Pengirim: ${target.sender_name}`,
+            accountId: prodId || key,
+            accountTitle: target.product_title || target.accountTitle || 'Akun Game',
+            game: target.game || 'MLBB',
+            sellingPrice: selling,
+            costPrice: cost,
+            profit: selling - cost,
+            date: Date.now(),
+            buyerNote: `Auto-recorded dari Pesanan ${key} (${target.payment_method}) - Pengirim: ${target.sender_name}`,
           });
         }
       } catch (postErr) {
