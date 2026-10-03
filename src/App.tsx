@@ -12,6 +12,7 @@ import { AddEditAccountModal } from './components/AddEditAccountModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { AntiFraudModal } from './components/AntiFraudModal';
 import { NegoModal } from './components/NegoModal';
+import { CheckoutPaymentModal } from './components/CheckoutPaymentModal';
 import { CloudSyncSettingsModal } from './components/CloudSyncSettingsModal';
 import { Footer } from './components/Footer';
 import { BottomNav } from './components/BottomNav';
@@ -40,6 +41,7 @@ export default function App() {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [selectedDetailAccount, setSelectedDetailAccount] = useState<GameAccount | null>(null);
   const [selectedNegoAccount, setSelectedNegoAccount] = useState<GameAccount | null>(null);
+  const [selectedCheckoutAccount, setSelectedCheckoutAccount] = useState<GameAccount | null>(null);
   const [isAddEditModalOpen, setIsAddEditModalOpen] = useState(false);
   const [accountToEdit, setAccountToEdit] = useState<GameAccount | null>(null);
   const [accountToDelete, setAccountToDelete] = useState<GameAccount | null>(null);
@@ -339,6 +341,7 @@ export default function App() {
                 account={account}
                 onViewDetail={(acc) => setSelectedDetailAccount(acc)}
                 onOpenNego={(acc) => setSelectedNegoAccount(acc)}
+                onCheckout={(acc) => setSelectedCheckoutAccount(acc)}
               />
             ))}
           </div>
@@ -419,6 +422,18 @@ export default function App() {
         account={selectedDetailAccount}
         onClose={() => setSelectedDetailAccount(null)}
         onOpenAntiFraudWarning={handleTriggerAntiFraudCheck}
+        onCheckout={(acc) => setSelectedCheckoutAccount(acc)}
+      />
+
+      <CheckoutPaymentModal
+        account={selectedCheckoutAccount}
+        isOpen={!!selectedCheckoutAccount}
+        onClose={() => setSelectedCheckoutAccount(null)}
+        onProceedWhatsApp={(waUrl) => {
+          handleTriggerAntiFraudCheck(() => {
+            window.open(waUrl, '_blank');
+          });
+        }}
       />
 
       <NegoModal

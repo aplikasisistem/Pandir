@@ -1,5 +1,5 @@
 import React from 'react';
-import { Star, ShieldCheck, MessageCircle, Eye, Tag, Sparkles } from 'lucide-react';
+import { Star, ShieldCheck, MessageCircle, Eye, Tag, Sparkles, CreditCard } from 'lucide-react';
 import { GameAccount } from '../types';
 import { formatRupiah, buildBuyWaLink } from '../utils/formatter';
 import { GameBadge } from './GameBadges';
@@ -8,6 +8,7 @@ interface AccountCardProps {
   account: GameAccount;
   onViewDetail: (account: GameAccount) => void;
   onOpenNego: (account: GameAccount) => void;
+  onCheckout?: (account: GameAccount) => void;
   isSellerMode?: boolean;
   onEdit?: (account: GameAccount) => void;
   onDelete?: (account: GameAccount) => void;
@@ -18,6 +19,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({
   account,
   onViewDetail,
   onOpenNego,
+  onCheckout,
   isSellerMode = false,
   onEdit,
   onDelete,
@@ -25,6 +27,9 @@ export const AccountCard: React.FC<AccountCardProps> = ({
 }) => {
   const isReady = account.status === 'READY';
   const isML = account.game === 'MLBB';
+  const isNegotiable = Boolean(
+    account.is_negotiable ?? account.bisa_nego ?? account.isNego
+  );
 
   return (
     <div className="group relative flex flex-col bg-slate-900/90 rounded-xl overflow-hidden border border-slate-800 hover:border-slate-700 transition-all duration-200 shadow-md hover:shadow-xl hover:shadow-orange-950/20">
@@ -68,14 +73,19 @@ export const AccountCard: React.FC<AccountCardProps> = ({
           )}
         </div>
 
-        {/* Bottom thumbnail tag: ID Lapak & Nego Status */}
+        {/* Bottom thumbnail tag: ID Lapak & Nego Status Badge */}
         <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between text-[10px] text-slate-300 font-mono">
           <span className="px-1.5 py-0.5 rounded bg-slate-950/80 border border-slate-800 text-slate-300">
             ID: {account.idLapak || account.accountId || account.id}
           </span>
-          {account.isNego && isReady && (
-            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold">
-              Bisa Nego
+          {isNegotiable ? (
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/25 border border-amber-400/50 text-amber-300 font-bold flex items-center gap-0.5 shadow-sm">
+              <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+              <span>Bisa Nego</span>
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-400 font-semibold">
+              Harga Pas / Nett
             </span>
           )}
         </div>
@@ -187,9 +197,20 @@ export const AccountCard: React.FC<AccountCardProps> = ({
             /* Buyer View: STRICTLY ONLY Harga Jual (Harga Modal is 100% hidden) */
             <div className="flex items-baseline justify-between gap-1">
               <div>
-                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                  Harga Buka
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
+                    {isNegotiable ? 'Harga Buka' : 'Harga Pas'}
+                  </span>
+                  {isNegotiable ? (
+                    <span className="px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold border border-amber-500/30">
+                      Nego
+                    </span>
+                  ) : (
+                    <span className="px-1 py-0.2 rounded bg-slate-800 text-slate-400 text-[9px] font-bold border border-slate-700">
+                      Nett
+                    </span>
+                  )}
+                </div>
                 <span className="text-base sm:text-lg font-black text-orange-500 font-mono tracking-tight">
                   {formatRupiah(account.price)}
                 </span>
@@ -246,17 +267,16 @@ export const AccountCard: React.FC<AccountCardProps> = ({
           ) : (
             /* Buyer Mode Buttons */
             <div className="mt-2.5 space-y-1.5">
-              {/* Primary Action: WhatsApp Direct */}
+              {/* Primary Action: Checkout Payment (QRIS / SeaBank) */}
               {isReady ? (
-                <a
-                  href={buildBuyWaLink(account)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full py-2 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/50 min-h-[38px]"
+                <button
+                  type="button"
+                  onClick={() => (onCheckout ? onCheckout(account) : onViewDetail(account))}
+                  className="w-full py-2 px-2.5 rounded-lg bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 hover:from-orange-500 hover:to-amber-500 active:scale-95 text-white font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-orange-950/50 min-h-[38px]"
                 >
-                  <MessageCircle className="w-3.5 h-3.5 fill-white" />
-                  <span>Beli via WA</span>
-                </a>
+                  <CreditCard className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Beli Sekarang (Bayar)</span>
+                </button>
               ) : (
                 <button
                   disabled
@@ -266,7 +286,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({
                 </button>
               )}
 
-              {/* Secondary Actions: Detail & Nego */}
+              {/* Secondary Actions: Detail & Nego / WA */}
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
@@ -277,7 +297,7 @@ export const AccountCard: React.FC<AccountCardProps> = ({
                   <span>Detail Foto</span>
                 </button>
 
-                {account.isNego && isReady ? (
+                {isNegotiable && isReady ? (
                   <button
                     type="button"
                     onClick={() => onOpenNego(account)}
@@ -289,9 +309,11 @@ export const AccountCard: React.FC<AccountCardProps> = ({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => onViewDetail(account)}
-                    className="py-1.5 px-2 rounded-lg bg-slate-800/60 text-slate-400 font-medium text-xs transition-colors flex items-center justify-center gap-1 min-h-[34px]"
+                    disabled
+                    className="py-1.5 px-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-500 font-semibold text-xs cursor-not-allowed flex items-center justify-center gap-1 min-h-[34px]"
+                    title="Produk ini berstatus Harga Pas / Nett (tidak menerima tawar-menawar)"
                   >
+                    <Tag className="w-3 h-3 text-slate-600" />
                     <span>Harga Pas</span>
                   </button>
                 )}
@@ -303,3 +325,4 @@ export const AccountCard: React.FC<AccountCardProps> = ({
     </div>
   );
 };
+

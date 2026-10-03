@@ -94,7 +94,7 @@ export const AddEditAccountModal: React.FC<AddEditAccountModalProps> = ({
     setCostPriceInput('');
     setStock(1);
     setStatus('READY');
-    setIsNego(true);
+    setIsNego(false);
     setWhatsappNumber('085717046895');
     setThumbnail('');
     setNotes('');
@@ -138,7 +138,14 @@ export const AddEditAccountModal: React.FC<AddEditAccountModalProps> = ({
         );
         setStock(initialAccount.stock ?? 1);
         setStatus(initialAccount.status || 'READY');
-        setIsNego(initialAccount.isNego ?? true);
+        setIsNego(
+          Boolean(
+            initialAccount.is_negotiable ??
+              initialAccount.bisa_nego ??
+              initialAccount.isNego ??
+              false
+          )
+        );
         setWhatsappNumber(initialAccount.whatsappNumber || '085717046895');
         setThumbnail(initialAccount.thumbnail || '');
         setNotes(initialAccount.notes || '');
@@ -417,6 +424,8 @@ export const AddEditAccountModal: React.FC<AddEditAccountModalProps> = ({
       stock: Number(stock) || 0,
       status: Number(stock) <= 0 ? 'SOLD_OUT' : status,
       isNego,
+      is_negotiable: isNego,
+      bisa_nego: isNego,
       whatsappNumber: whatsappNumber.trim() || '085717046895',
       rating: initialAccount ? initialAccount.rating : 5.0,
       soldCount: initialAccount ? initialAccount.soldCount : 0,
@@ -884,6 +893,42 @@ export const AddEditAccountModal: React.FC<AddEditAccountModalProps> = ({
                 <option value="BOOKED">🟡 BOOKED (Dipesan)</option>
               </select>
             </div>
+          </div>
+
+          {/* Section 4.5: Toggle Status Bisa Nego */}
+          <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div
+                className={`p-2 rounded-lg transition-colors ${
+                  isNego ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <label
+                  htmlFor="isNegoCheckbox"
+                  className="text-xs font-bold text-white cursor-pointer block"
+                >
+                  Bisa Nego? (Centang jika harga bisa ditawar)
+                </label>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {isNego
+                    ? 'Status aktif: Badge "Bisa Nego" akan muncul di kartu produk dan tombol Nego terbuka untuk pembeli.'
+                    : 'Status pas: Badge "Harga Pas / Nett" akan muncul di kartu produk.'}
+                </p>
+              </div>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                id="isNegoCheckbox"
+                type="checkbox"
+                checked={isNego}
+                onChange={(e) => setIsNego(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+            </label>
           </div>
 
           {/* Section 5: Thumbnail & Gallery Photos */}

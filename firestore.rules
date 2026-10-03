@@ -28,6 +28,33 @@ service cloud.firestore {
       allow create, update, delete: if isValidId(saleId);
     }
 
+    // Koleksi Pengaturan Pembayaran & Rekening (pengaturan_pembayaran & payment_settings)
+    match /pengaturan_pembayaran/{configId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(configId);
+    }
+
+    match /payment_settings/{configId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(configId);
+    }
+
+    // Koleksi Konfirmasi Pembayaran & Pesanan Pembeli (konfirmasi_pembayaran, orders, transactions)
+    match /konfirmasi_pembayaran/{orderId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(orderId);
+    }
+
+    match /orders/{orderId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(orderId);
+    }
+
+    match /transactions/{orderId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(orderId);
+    }
+
     // Kompatibilitas koleksi terdahulu
     match /gamestore_accounts/{accountId} {
       allow read: if true;

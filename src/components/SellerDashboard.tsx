@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Plus,
   ArrowLeft,
@@ -11,15 +11,19 @@ import {
   ShieldCheck,
   CheckCircle,
   Eye,
+  CreditCard,
+  PieChart,
+  LayoutGrid,
+  CheckCircle2,
+  Bell,
 } from 'lucide-react';
-import { GameAccount, SaleRecord } from '../types';
+import { GameAccount, SaleRecord, OrderTransaction } from '../types';
 import { formatRupiah, formatNumber } from '../utils/formatter';
 import { AccountCard } from './AccountCard';
 import { realtimeSync } from '../services/realtimeSync';
 import { PandirStoreEmblem } from './PandirStoreLogo';
-import { ProfitLossDashboard } from './ProfitLossDashboard';
 import { AdminDashboard } from './AdminDashboard';
-import { PieChart, LayoutGrid } from 'lucide-react';
+import { PaymentSettingsModal } from './PaymentSettingsModal';
 
 interface SellerDashboardProps {
   accounts: GameAccount[];
@@ -48,6 +52,24 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'catalog' | 'profit_loss'>('catalog');
   const [filterGame, setFilterGame] = useState<'ALL' | 'MLBB' | 'FREE_FIRE'>('ALL');
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentModalTab, setPaymentModalTab] = useState<'config' | 'confirmations'>('config');
+
+  const [confirmations, setConfirmations] = useState<OrderTransaction[]>(() =>
+    realtimeSync.getPaymentConfirmations()
+  );
+
+  // Subscribe to real-time order confirmations to track pending count badge
+  useEffect(() => {
+    const unsub = realtimeSync.subscribePaymentConfirmations((confs) => {
+      setConfirmations(confs);
+    });
+    return () => unsub();
+  }, []);
+
+  const pendingOrdersCount = confirmations.filter(
+    (c) => c.status === 'PENDING' || c.status === 'MENUNGGU_VERIFIKASI'
+  ).length;
 
   const filteredAccounts = accounts.filter((a) => {
     if (filterGame === 'ALL') return true;
@@ -56,7 +78,10 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 
   const totalReady = accounts.filter((a) => a.status === 'READY').length;
   const totalSold = accounts.filter((a) => a.status === 'SOLD_OUT').length;
-  const totalEstimatedValue = accounts.reduce((acc, curr) => acc + (curr.status === 'READY' ? curr.price : 0), 0);
+  const totalEstimatedValue = accounts.reduce(
+    (acc, curr) => acc + (curr.status === 'READY' ? curr.price : 0),
+    0
+  );
   const syncStatus = realtimeSync.getSyncStatus();
 
   return (
@@ -66,51 +91,82 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
     >
       {/* Top Seller Bar with Safe Area Top */}
       <div
-        className="bg-slate-900 border-b border-slate-800 sticky top-0 left-0 right-0 z-40 backdrop-blur-md safe-top w-full"
+        className="bg-slate-900 border-b border-slate-800 sticky top-0 left-0 right-0 z-40 backdrop-blur-md safe-top w-full shadow-md"
         style={{
-          top: 0,
-          left: 0,
-          right: 0,
-          paddingTop: 'env(safe-area-inset-top, 0px)',
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 6px)',
         }}
       >
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 sm:gap-4">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
             <button
               onClick={onBackToKatalog}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-semibold transition-colors min-h-[38px]"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-semibold transition-colors min-h-[36px]"
+              title="Kembali ke Katalog Publik"
             >
               <ArrowLeft className="w-4 h-4" />
               <span className="hidden xs:inline">Ke Katalog</span>
             </button>
 
-            <div className="h-6 w-px bg-slate-800 hidden sm:block"></div>
+            <div className="h-5 w-px bg-slate-800 hidden sm:block"></div>
 
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 via-blue-600 to-orange-500 p-[1.5px] flex items-center justify-center">
-                <div className="w-full h-full bg-slate-950 rounded-[7px] flex items-center justify-center">
-                  <PandirStoreEmblem className="w-5 h-5" />
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-br from-cyan-400 via-blue-600 to-orange-500 p-[1.5px] flex items-center justify-center">
+                <div className="w-full h-full bg-slate-950 rounded-[6px] sm:rounded-[7px] flex items-center justify-center">
+                  <PandirStoreEmblem className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
               </div>
-              <span className="text-xs sm:text-base font-black text-white truncate max-w-[140px] sm:max-w-none">
+              <span className="text-xs sm:text-base font-black text-white truncate max-w-[120px] sm:max-w-none">
                 Admin <span className="text-orange-400 font-mono">(Pandir)</span>
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Action Buttons Top Right: Pengaturan Pembayaran, Sync Cloud, Logout */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Quick Button: Pengaturan Pembayaran Dinamis & Rekening */}
+            <button
+              onClick={() => {
+                setPaymentModalTab('config');
+                setIsPaymentModalOpen(true);
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-orange-950/80 hover:bg-orange-900 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[36px]"
+              title="Pengaturan Rekening SeaBank & QRIS Dinamis"
+            >
+              <CreditCard className="w-3.5 h-3.5 text-orange-400" />
+              <span className="hidden md:inline">Pengaturan Pembayaran</span>
+            </button>
+
+            {/* Quick Button: Pesanan Masuk / Verifikasi */}
+            <button
+              onClick={() => {
+                setPaymentModalTab('confirmations');
+                setIsPaymentModalOpen(true);
+              }}
+              className="relative px-2.5 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[36px]"
+              title="Verifikasi Pembayaran & Approval Pesanan Masuk"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden md:inline">Pesanan Masuk</span>
+              {pendingOrdersCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse">
+                  {pendingOrdersCount}
+                </span>
+              )}
+            </button>
+
             <button
               onClick={onOpenSyncSettings}
-              className="px-2.5 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 border border-blue-500/40 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[38px]"
+              className="px-2.5 py-1.5 rounded-lg bg-blue-950/80 hover:bg-blue-900 border border-blue-500/40 text-blue-300 text-xs font-semibold flex items-center gap-1.5 transition-colors min-h-[36px]"
               title="Pengaturan Sinkronisasi Real-Time"
             >
               <Database className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Sync Cloud</span>
+              <span className="hidden lg:inline">Sync Cloud</span>
             </button>
 
             <button
               onClick={onLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/80 border border-red-500/40 text-red-300 text-xs sm:text-sm font-semibold transition-colors min-h-[38px]"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/80 border border-red-500/40 text-red-300 text-xs sm:text-sm font-semibold transition-colors min-h-[36px]"
+              title="Keluar dari sesi seller"
             >
               <LogOut className="w-4 h-4" />
               <span className="hidden sm:inline">Keluar</span>
@@ -119,28 +175,28 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
         </div>
 
         {/* Top Navigation Tabs: Manajemen Lapak vs Rekap Keuangan */}
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 flex items-center gap-2 border-t border-slate-800/80 bg-slate-950/60">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 flex items-center gap-1 sm:gap-2 border-t border-slate-800/80 bg-slate-950/60">
           <button
             onClick={() => setActiveTab('catalog')}
-            className={`flex items-center gap-2 py-2.5 px-3 sm:px-4 text-xs sm:text-sm font-bold border-b-2 transition-all min-h-[44px] ${
+            className={`flex items-center gap-1.5 py-2 px-2.5 sm:px-4 text-xs sm:text-sm font-bold border-b-2 transition-all min-h-[40px] ${
               activeTab === 'catalog'
                 ? 'border-orange-500 text-orange-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <LayoutGrid className="w-4 h-4" />
+            <LayoutGrid className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             <span>Kelola Lapak (Itemku 2-Kolom)</span>
           </button>
 
           <button
             onClick={() => setActiveTab('profit_loss')}
-            className={`flex items-center gap-2 py-2.5 px-3 sm:px-4 text-xs sm:text-sm font-bold border-b-2 transition-all min-h-[44px] ${
+            className={`flex items-center gap-1.5 py-2 px-2.5 sm:px-4 text-xs sm:text-sm font-bold border-b-2 transition-all min-h-[40px] ${
               activeTab === 'profit_loss'
                 ? 'border-orange-500 text-orange-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <PieChart className="w-4 h-4 text-emerald-400" />
+            <PieChart className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
             <span>Rekap Keuangan &amp; Laba Rugi</span>
             <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[10px] hidden sm:inline">
               PROFIT &amp; LOSS
@@ -149,97 +205,93 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-6 space-y-6">
+      {/* Main Container - Optimized Compact Layout for Mobile Above-The-Fold */}
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 pt-2 sm:pt-4 space-y-2 sm:space-y-4">
         {activeTab === 'profit_loss' ? (
           /* Admin Financial Real-Time Dashboard */
           <AdminDashboard
             initialAccounts={accounts}
             initialSalesRecords={salesRecords}
+            onOpenPaymentSettings={() => {
+              setPaymentModalTab('config');
+              setIsPaymentModalOpen(true);
+            }}
+            onOpenOrderApproval={() => {
+              setPaymentModalTab('confirmations');
+              setIsPaymentModalOpen(true);
+            }}
           />
         ) : (
-          /* Catalog Management View (Itemku Style) */
+          /* Section 6: Responsive Layout Mobile (Itemku 2-Kolom) */
           <>
-            {/* Real-time sync alert badge */}
-            <div className="bg-gradient-to-r from-emerald-950/60 via-slate-900 to-blue-950/60 p-3 sm:p-3.5 rounded-xl border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
-                <div>
-                  <span className="font-bold text-white">Sinkronisasi Multi-Device Aktif: </span>
+            {/* Real-time sync alert badge - Compact on Mobile */}
+            <div className="bg-gradient-to-r from-emerald-950/60 via-slate-900 to-blue-950/60 p-2 sm:p-3 rounded-xl border border-emerald-500/30 flex items-center justify-between gap-2 text-[11px] sm:text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0"></span>
+                <div className="truncate">
+                  <span className="font-bold text-white">Sinkronisasi: </span>
                   <span className="text-emerald-300">{syncStatus.label}</span>
                 </div>
               </div>
-              <span className="text-slate-400 text-[11px]">
-                Harga Modal (COGS) dan margin keuntungan ditampilkan khusus untuk Penjual.
+              <span className="text-slate-400 text-[10px] sm:text-[11px] shrink-0 hidden sm:inline">
+                Harga Modal (COGS) dan margin ditampilkan khusus untuk Penjual.
               </span>
             </div>
 
-            {/* Seller Statistics Overview Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-              <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Total Lapak Akun</span>
-                  <ShoppingBag className="w-4 h-4 text-orange-400" />
-                </div>
-                <div className="text-lg sm:text-2xl font-black text-white">{accounts.length}</div>
-                <div className="text-[11px] text-slate-400">Katalog MLBB &amp; Free Fire</div>
+            {/* Seller Statistics Overview - Compact 4-Column Strip on Mobile to Save Above-the-fold Height */}
+            <div className="grid grid-cols-4 gap-1.5 sm:gap-3 bg-slate-900/80 p-2 sm:p-3.5 rounded-xl border border-slate-800">
+              <div className="text-center sm:text-left space-y-0.5">
+                <span className="text-[10px] text-slate-400 block truncate">Total Lapak</span>
+                <span className="text-sm sm:text-xl font-black text-white block">{accounts.length}</span>
               </div>
 
-              <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-emerald-900/50 space-y-1">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Stok Ready Aktif</span>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                </div>
-                <div className="text-lg sm:text-2xl font-black text-emerald-400">{totalReady}</div>
-                <div className="text-[11px] text-emerald-300/80">Siap Ditransaksikan</div>
+              <div className="text-center sm:text-left space-y-0.5 border-l border-slate-800/80 pl-1.5 sm:pl-3">
+                <span className="text-[10px] text-emerald-400 block truncate">Stok Ready</span>
+                <span className="text-sm sm:text-xl font-black text-emerald-400 block">{totalReady}</span>
               </div>
 
-              <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Total Akun Terjual</span>
-                  <TrendingUp className="w-4 h-4 text-blue-400" />
-                </div>
-                <div className="text-lg sm:text-2xl font-black text-blue-400">{totalSold}</div>
-                <div className="text-[11px] text-slate-400">Status Sold Out</div>
+              <div className="text-center sm:text-left space-y-0.5 border-l border-slate-800/80 pl-1.5 sm:pl-3">
+                <span className="text-[10px] text-blue-400 block truncate">Terjual</span>
+                <span className="text-sm sm:text-xl font-black text-blue-400 block">{totalSold}</span>
               </div>
 
-              <div className="p-3.5 sm:p-4 rounded-xl bg-slate-900 border border-amber-900/40 space-y-1">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Estimasi Nilai Stok Ready</span>
-                  <Sparkles className="w-4 h-4 text-amber-400" />
-                </div>
-                <div className="text-sm sm:text-xl font-black text-orange-400 font-mono truncate">
+              <div className="text-center sm:text-left space-y-0.5 border-l border-slate-800/80 pl-1.5 sm:pl-3 min-w-0">
+                <span className="text-[10px] text-amber-400 block truncate">Nilai Stok</span>
+                <span className="text-xs sm:text-lg font-black text-orange-400 font-mono block truncate">
                   {formatRupiah(totalEstimatedValue)}
-                </div>
-                <div className="text-[11px] text-slate-400">Katalog Tersedia</div>
+                </span>
               </div>
             </div>
 
-            {/* Section Header & Create Action */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+            {/* Section Header & Create Action - Inline Responsive Bar */}
+            <div className="flex items-center justify-between gap-2 pt-0.5">
               <div>
-                <h2 className="text-base sm:text-xl font-black text-white flex items-center gap-2">
-                  <span>Manajemen Lapak Akun (Pratinjau Itemku Style)</span>
+                <h2 className="text-xs sm:text-base font-black text-white flex items-center gap-1.5">
+                  <span>Kelola Lapak Akun</span>
+                  <span className="px-1.5 py-0.2 rounded bg-orange-500/20 text-orange-400 text-[10px] font-mono hidden sm:inline">
+                    ITEMKU STYLE
+                  </span>
                 </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Tata letak Grid 2-Kolom di HP menampilkan Harga Jual, Modal (COGS), dan Margin Laba.
+                <p className="text-[10px] text-slate-400 hidden sm:block">
+                  Grid 2-Kolom menampilkan Harga Jual, Modal (COGS), dan Margin Laba Penjual.
                 </p>
               </div>
 
-              {/* Add Account CTA button */}
+              {/* Add Account CTA button - Compact on Mobile */}
               <button
                 onClick={onAddNewAccount}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 hover:from-orange-500 hover:to-amber-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-lg shadow-orange-950 transition-all min-h-[44px]"
+                className="flex items-center justify-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 hover:from-orange-500 hover:to-amber-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md shadow-orange-950 transition-all min-h-[36px] sm:min-h-[40px] shrink-0"
               >
-                <Plus className="w-5 h-5 stroke-[2.5]" />
-                <span>Tambah Lapak Baru</span>
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>+ Tambah Lapak</span>
               </button>
             </div>
 
-            {/* Filter Tabs for Seller */}
-            <div className="flex items-center gap-1.5 p-1 bg-slate-900 rounded-xl border border-slate-800 max-w-sm">
+            {/* Filter Tabs for Seller - Compact Spacing */}
+            <div className="flex items-center gap-1 p-0.5 sm:p-1 bg-slate-900 rounded-lg border border-slate-800 max-w-xs sm:max-w-sm">
               <button
                 onClick={() => setFilterGame('ALL')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                className={`flex-1 py-1 px-2 rounded-md text-[11px] sm:text-xs font-bold transition-all ${
                   filterGame === 'ALL' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -247,7 +299,7 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
               </button>
               <button
                 onClick={() => setFilterGame('MLBB')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                className={`flex-1 py-1 px-2 rounded-md text-[11px] sm:text-xs font-bold transition-all ${
                   filterGame === 'MLBB' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -255,7 +307,7 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
               </button>
               <button
                 onClick={() => setFilterGame('FREE_FIRE')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                className={`flex-1 py-1 px-2 rounded-md text-[11px] sm:text-xs font-bold transition-all ${
                   filterGame === 'FREE_FIRE' ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -263,8 +315,8 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
               </button>
             </div>
 
-            {/* 2-Column Grid on Mobile as specifically requested in Section E.1 */}
-            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4">
+            {/* 2-Column Grid on Mobile - Immediate Above-The-Fold Visibility */}
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3.5">
               {filteredAccounts.map((account) => (
                 <AccountCard
                   key={account.id}
@@ -280,14 +332,14 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
             </div>
 
             {filteredAccounts.length === 0 && (
-              <div className="p-12 text-center bg-slate-900/60 rounded-2xl border border-slate-800">
-                <ShoppingBag className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                <p className="text-slate-300 font-bold">Belum ada lapak akun untuk filter ini.</p>
+              <div className="p-8 sm:p-12 text-center bg-slate-900/60 rounded-2xl border border-slate-800">
+                <ShoppingBag className="w-10 h-10 text-slate-600 mx-auto mb-2" />
+                <p className="text-slate-300 font-bold text-xs sm:text-sm">Belum ada lapak akun untuk filter ini.</p>
                 <button
                   onClick={onAddNewAccount}
-                  className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-orange-600 text-white text-xs font-bold"
+                  className="mt-2.5 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-orange-600 text-white text-xs font-bold"
                 >
-                  <Plus className="w-4 h-4" />
+                  <Plus className="w-3.5 h-3.5" />
                   <span>Tambah Lapak Sekarang</span>
                 </button>
               </div>
@@ -295,6 +347,13 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
           </>
         )}
       </div>
+
+      {/* Payment Settings & Order Approval Modal */}
+      <PaymentSettingsModal
+        isOpen={isPaymentModalOpen}
+        onClose={() => setIsPaymentModalOpen(false)}
+        defaultTab={paymentModalTab}
+      />
     </div>
   );
 };

@@ -12,6 +12,7 @@ import {
   Info,
   CheckCircle2,
   AlertTriangle,
+  CreditCard,
 } from 'lucide-react';
 import { GameAccount } from '../types';
 import {
@@ -29,22 +30,28 @@ interface AccountDetailModalProps {
   account: GameAccount | null;
   onClose: () => void;
   onOpenAntiFraudWarning: (callback: () => void) => void;
+  onCheckout?: (account: GameAccount) => void;
 }
 
 export const AccountDetailModal: React.FC<AccountDetailModalProps> = ({
   account,
   onClose,
   onOpenAntiFraudWarning,
+  onCheckout,
 }) => {
   if (!account) return null;
+
+  const isReady = account.status === 'READY';
+  const isML = account.game === 'MLBB';
+  const isNegotiable = Boolean(
+    account.is_negotiable ?? account.bisa_nego ?? account.isNego
+  );
 
   const [activePhotoIndex, setActivePhotoIndex] = useState(0);
   const [negoInput, setNegoInput] = useState<string>('');
   const [negoError, setNegoError] = useState<string | null>(null);
   const [showNegoForm, setShowNegoForm] = useState(false);
 
-  const isReady = account.status === 'READY';
-  const isML = account.game === 'MLBB';
   const gallery = account.gallery && account.gallery.length > 0
     ? account.gallery
     : [{ category: 'Foto Utama', url: account.thumbnail, label: account.title }];
@@ -361,7 +368,7 @@ export const AccountDetailModal: React.FC<AccountDetailModalProps> = ({
           </div>
 
           {/* Nego Section */}
-          {account.isNego && isReady && (
+          {isNegotiable && isReady && (
             <div className="bg-slate-950/90 rounded-xl border border-amber-500/30 p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -426,32 +433,46 @@ export const AccountDetailModal: React.FC<AccountDetailModalProps> = ({
         <div className="px-4 py-3 bg-slate-950 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div>
             <span className="text-[11px] text-slate-400 uppercase tracking-wider block">
-              Harga Pas / Buka
+              {isNegotiable ? 'Harga Buka' : 'Harga Pas (Nett)'}
             </span>
             <div className="text-xl sm:text-2xl font-black text-orange-500 font-mono">
               {formatRupiah(account.price)}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             {isReady ? (
               <>
-                {account.isNego && !showNegoForm && (
+                {/* Primary: Bayar Sekarang (Checkout QRIS / SeaBank) */}
+                {onCheckout && (
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onCheckout(account);
+                    }}
+                    className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 hover:from-orange-500 hover:to-amber-500 active:scale-95 text-white font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-orange-950/60 min-h-[44px]"
+                  >
+                    <CreditCard className="w-4 h-4 stroke-[2.5]" />
+                    <span>Bayar (QRIS / SeaBank)</span>
+                  </button>
+                )}
+
+                {isNegotiable && !showNegoForm && (
                   <button
                     onClick={() => setShowNegoForm(true)}
-                    className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 min-h-[44px]"
+                    className="flex-1 sm:flex-initial px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 min-h-[44px]"
                   >
                     <Tag className="w-4 h-4 text-amber-400" />
-                    <span>Nego Harga</span>
+                    <span>Nego</span>
                   </button>
                 )}
 
                 <button
                   onClick={handleDirectBuy}
-                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/60 min-h-[44px]"
+                  className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-950/60 min-h-[44px]"
                 >
                   <MessageCircle className="w-4 h-4 fill-white" />
-                  <span>Beli Langsung via WA</span>
+                  <span>Chat WA</span>
                 </button>
               </>
             ) : (

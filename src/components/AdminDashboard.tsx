@@ -25,12 +25,19 @@ import {
   Trash2,
   CloudUpload,
   X,
+  CreditCard,
+  ThumbsUp,
+  ThumbsDown,
+  MessageCircle,
+  Eye,
+  AlertTriangle,
 } from 'lucide-react';
-import { GameAccount, SaleRecord, GameType } from '../types';
+import { GameAccount, SaleRecord, GameType, OrderTransaction } from '../types';
 import { realtimeSync } from '../services/realtimeSync';
 import { formatRupiah, formatNumber } from '../utils/formatter';
 import { MLBBLogo, FreeFireLogo } from './GameBadges';
 import { PandirStoreEmblem } from './PandirStoreLogo';
+import { PaymentSettingsModal } from './PaymentSettingsModal';
 import { useToast } from '../context/ToastContext';
 
 export type AdminDateRange = 'daily' | 'weekly' | 'monthly' | 'all' | 'custom';
@@ -39,6 +46,8 @@ export interface AdminDashboardProps {
   initialAccounts?: GameAccount[];
   initialSalesRecords?: SaleRecord[];
   onBackToKatalog?: () => void;
+  onOpenPaymentSettings?: () => void;
+  onOpenOrderApproval?: () => void;
 }
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +56,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   initialAccounts,
   initialSalesRecords,
   onBackToKatalog,
+  onOpenPaymentSettings,
+  onOpenOrderApproval,
 }) => {
   const { showToast } = useToast();
 
@@ -60,6 +71,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return realtimeSync.getSalesRecords();
   });
 
+  const [confirmations, setConfirmations] = useState<OrderTransaction[]>(() =>
+    realtimeSync.getPaymentConfirmations()
+  );
+
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -71,11 +86,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedGame, setSelectedGame] = useState<'ALL' | 'MLBB' | 'FREE_FIRE'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Default activeTab to 'sales_ledger' if sales exist
-  const [activeTab, setActiveTab] = useState<'all_accounts' | 'sales_ledger'>(() => {
-    const currentSales = initialSalesRecords || realtimeSync.getSalesRecords();
-    return currentSales.length > 0 ? 'sales_ledger' : 'sales_ledger';
-  });
+  // Tab: 'all_accounts' | 'sales_ledger' | 'orders_approval'
+  const [activeTab, setActiveTab] = useState<'all_accounts' | 'sales_ledger' | 'orders_approval'>('sales_ledger');
+
+  // Internal Payment Settings Modal state
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentModalTab, setPaymentModalTab] = useState<'config' | 'confirmations'>('config');
+  const [selectedProofLightbox, setSelectedProofLightbox] = useState<string | null>(null);
 
   // Modal manual input transaksi penjualan baru
   const [isAddSaleModalOpen, setIsAddSaleModalOpen] = useState(false);
@@ -114,11 +131,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setLastUpdated(new Date());
     });
 
+    const unsubscribeConfirmations = realtimeSync.subscribePaymentConfirmations((latestConfs) => {
+      setConfirmations(latestConfs);
+    });
+
     return () => {
       unsubscribeAccounts();
       unsubscribeSales();
+      unsubscribeConfirmations();
     };
   }, []);
+
+  const pendingOrdersCount = confirmations.filter(
+    (c) => c.status === 'PENDING' || c.status === 'MENUNGGU_VERIFIKASI'
+  ).length;
+
+  // Handlers for Order Approval Workflow
+  const handleApproveOrder = async (order: OrderTransaction) => {
+    const orderKey = order.order_id || order.id;
+    try {
+      await realtimeSync.updatePaymentConfirmationStatus(orderKey, 'PAID_APPROVED');
+      showToast({
+        type: 'success',
+        title: 'Pesanan Disetujui (PAID_APPROVED)!',
+        message: `Pembayaran pesanan ${orderKey} telah diverifikasi. Silakan kirimkan akun ke pembeli.`,
+      });
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        title: 'Gagal Menyetujui',
+        message: err?.message || 'Kendala saat update status.',
+      });
+    }
+  };
+
+  const handleRejectUnderpaid = async (order: OrderTransaction) => {
+    const orderKey = order.order_id || order.id;
+    try {
+      await realtimeSync.updatePaymentConfirmationStatus(orderKey, 'REJECTED_UNDERPAID');
+      showToast({
+        type: 'info',
+        title: 'Pesanan Ditolak (Nominal Kurang)',
+        message: `Status pesanan ${orderKey} diubah ke REJECTED_UNDERPAID. Gunakan tombol Chat WhatsApp untuk hubungi pembeli.`,
+      });
+    } catch (err: any) {
+      showToast({
+        type: 'error',
+        title: 'Gagal Menolak',
+        message: err?.message || 'Kendala saat update status.',
+      });
+    }
+  };
+
+  const handleChatBuyer = (order: OrderTransaction) => {
+    const buyerPhone = (order.buyer_whatsapp || '').replace(/\D/g, '');
+    const cleanPhone = buyerPhone.startsWith('0') ? '62' + buyerPhone.slice(1) : buyerPhone;
+    const diff = (order.total_amount || 0) - (order.claimed_amount || 0);
+
+    const message =
+      `Halo Kak ${order.sender_name}, kami dari Admin PandirStore mengenai pesanan *${order.order_id || order.id}* ` +
+      `untuk akun *${order.product_title || order.accountTitle}*.\n\n` +
+      `Total tagihan resmi: *${formatRupiah(order.total_amount || order.amount)}* (Kode Unik: ${order.unique_code || '-'})\n` +
+      `Nominal yang masuk: *${formatRupiah(order.claimed_amount || order.amount)}*\n` +
+      (diff > 0
+        ? `⚠️ Terdapat selisih nominal kurang sebesar *${formatRupiah(diff)}*.\n` +
+          `Mohon transfer sisa kekurangannya ke rekening SeaBank kami atau konfirmasikan rekening Anda jika ingin retur dana.`
+        : `Status pesanan Anda telah kami periksa. Mohon tunggu proses pengiriman data akun game.`);
+
+    const helpWa = realtimeSync.getPaymentConfig().helpWhatsApp || '085717046895';
+    const waUrl = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+      : `https://wa.me/${helpWa.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`;
+
+    window.open(waUrl, '_blank');
+  };
 
   // Filter accounts based on date range, game, and search query
   const filteredAccounts = useMemo(() => {
@@ -478,8 +564,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Action Export & Cloud Sync Buttons - Compact */}
+        {/* Action Export, Cloud Sync, Payment Settings, & Order Approval Buttons */}
         <div className="flex flex-wrap items-center gap-2 print:hidden shrink-0">
+          {/* Pengaturan Pembayaran Dinamis */}
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenPaymentSettings) onOpenPaymentSettings();
+              else {
+                setPaymentModalTab('config');
+                setIsPaymentModalOpen(true);
+              }
+            }}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-950/80 hover:bg-orange-900 border border-orange-500/40 text-orange-300 text-xs font-semibold shadow-sm active:scale-95 h-8 transition-all"
+            title="Pengaturan Rekening SeaBank & QRIS Dinamis"
+          >
+            <CreditCard className="w-3.5 h-3.5 text-orange-400" />
+            <span>Pengaturan Rekening &amp; QRIS</span>
+          </button>
+
+          {/* Quick Button: Approval Pesanan Masuk */}
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenOrderApproval) onOpenOrderApproval();
+              else {
+                setActiveTab('orders_approval');
+              }
+            }}
+            className="relative flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-xs font-semibold shadow-sm active:scale-95 h-8 transition-all"
+            title="Verifikasi Pembayaran & Approval Pesanan Masuk"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Approval Pesanan</span>
+            {pendingOrdersCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[10px] font-bold animate-pulse">
+                {pendingOrdersCount}
+              </span>
+            )}
+          </button>
+
           <button
             onClick={() => setIsAddSaleModalOpen(true)}
             className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white text-xs font-bold shadow-md shadow-orange-950/40 active:scale-95 h-8 transition-all"
@@ -500,7 +624,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             ) : (
               <CloudUpload className="w-3.5 h-3.5 text-blue-400" />
             )}
-            <span>{isSyncingCloud ? 'Menyinkronkan...' : 'Sync Cloud (HP ➔ PC)'}</span>
+            <span>{isSyncingCloud ? 'Menyinkronkan...' : 'Sync Cloud'}</span>
           </button>
 
           <button
@@ -796,7 +920,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           <div className="flex items-center gap-2">
             <span className="text-xs text-slate-400 font-semibold hidden sm:inline">Tampilan:</span>
-            <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
+            <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800 flex-wrap gap-1">
               <button
                 onClick={() => setActiveTab('all_accounts')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
@@ -817,13 +941,196 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                 Buku Penjualan ({filteredSales.length})
               </button>
+              <button
+                onClick={() => setActiveTab('orders_approval')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 ${
+                  activeTab === 'orders_approval'
+                    ? 'bg-orange-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>Approval Pesanan ({confirmations.length})</span>
+                {pendingOrdersCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[9px] font-bold animate-pulse">
+                    {pendingOrdersCount} Baru
+                  </span>
+                )}
+              </button>
             </div>
           </div>
         </div>
 
         {/* Table Content */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
+          {activeTab === 'orders_approval' ? (
+            /* SECTION 4: WORKFLOW APPROVAL PESANAN TABLE */
+            <div className="divide-y divide-slate-800">
+              {confirmations.length === 0 ? (
+                <div className="p-12 text-center text-slate-500">
+                  <p className="mb-2">Belum ada konfirmasi pembayaran baru dari pembeli.</p>
+                </div>
+              ) : (
+                confirmations.map((conf) => {
+                  const orderKey = conf.order_id || conf.id;
+                  const officialTotal = conf.total_amount || conf.amount || 0;
+                  const claimed = conf.claimed_amount || conf.amount || officialTotal;
+                  const diff = officialTotal - claimed;
+                  const hasDiscrepancy = claimed < officialTotal;
+                  const proofUrl = conf.proof_of_payment_url || conf.proofImageUrl;
+                  const isPending = conf.status === 'PENDING' || conf.status === 'MENUNGGU_VERIFIKASI';
+                  const isApproved = conf.status === 'PAID_APPROVED' || conf.status === 'TERVERIFIKASI';
+                  const isRejected = conf.status === 'REJECTED_UNDERPAID' || conf.status === 'DITOLAK';
+
+                  return (
+                    <div
+                      key={orderKey}
+                      className="p-4 hover:bg-slate-800/40 transition-colors flex flex-col space-y-3"
+                    >
+                      {/* Order Header & Status Badge */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-orange-400 text-sm">
+                            {orderKey}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              isApproved
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : isRejected
+                                ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                            }`}
+                          >
+                            {conf.status}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-mono">
+                            {conf.payment_method}
+                          </span>
+                        </div>
+
+                        <span className="text-[11px] text-slate-400">
+                          {new Date(conf.created_at || conf.createdAt).toLocaleString('id-ID')}
+                        </span>
+                      </div>
+
+                      {/* Order Details Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 block text-[10px]">Produk Akun:</span>
+                          <span className="font-bold text-white truncate block">
+                            {conf.product_title || conf.accountTitle}
+                          </span>
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400 block text-[10px]">Total Tagihan Resmi:</span>
+                          <span className="font-bold text-orange-400 font-mono">
+                            {formatRupiah(officialTotal)}
+                          </span>
+                          {conf.unique_code && (
+                            <span className="text-[10px] text-slate-500 block">
+                              Kode Unik: {conf.unique_code}
+                            </span>
+                          )}
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400 block text-[10px]">Nominal Ditransfer:</span>
+                          <span
+                            className={`font-bold font-mono ${
+                              hasDiscrepancy ? 'text-red-400' : 'text-emerald-400'
+                            }`}
+                          >
+                            {formatRupiah(claimed)}
+                          </span>
+                          {hasDiscrepancy && (
+                            <span className="text-[10px] text-red-400 font-semibold block">
+                              Kurang {formatRupiah(diff)}
+                            </span>
+                          )}
+                        </div>
+
+                        <div>
+                          <span className="text-slate-400 block text-[10px]">Nama Pengirim:</span>
+                          <span className="font-bold text-white">{conf.sender_name}</span>
+                          {conf.buyer_whatsapp && (
+                            <span className="text-[10px] text-emerald-400 font-mono block">
+                              WA: {conf.buyer_whatsapp}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Notes if any */}
+                      {conf.notes && (
+                        <div className="text-[11px] text-slate-400 italic bg-slate-950/40 p-2 rounded-lg border border-slate-800/60">
+                          Catatan: &quot;{conf.notes}&quot;
+                        </div>
+                      )}
+
+                      {/* Action Buttons for Seller Approval */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                        {proofUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProofLightbox(proofUrl)}
+                            className="px-2.5 py-1.5 rounded-lg bg-blue-950 text-blue-300 hover:bg-blue-900 text-xs font-semibold flex items-center gap-1 border border-blue-500/30 transition-colors"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Lihat Bukti Transfer</span>
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 italic">
+                            Tidak melampirkan screenshot bukti
+                          </span>
+                        )}
+
+                        <div className="flex items-center gap-2">
+                          {isPending && (
+                            <>
+                              {/* Tombol Aksi [Tolak - Nominal Kurang] */}
+                              <button
+                                type="button"
+                                onClick={() => handleRejectUnderpaid(conf)}
+                                className="px-3 py-1.5 rounded-lg bg-red-950 hover:bg-red-900 text-red-300 border border-red-500/40 text-xs font-bold flex items-center gap-1 transition-all active:scale-95"
+                                title="Tolak pesanan karena nominal transfer kurang dari tagihan"
+                              >
+                                <ThumbsDown className="w-3.5 h-3.5" />
+                                <span>Tolak (Nominal Kurang)</span>
+                              </button>
+
+                              {/* Tombol Aksi [Setujui / Kirim Akun] */}
+                              <button
+                                type="button"
+                                onClick={() => handleApproveOrder(conf)}
+                                className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white text-xs font-bold flex items-center gap-1 shadow-md shadow-emerald-950 transition-all active:scale-95"
+                                title="Setujui pembayaran dan lanjutkan ke pengiriman akun"
+                              >
+                                <ThumbsUp className="w-3.5 h-3.5" />
+                                <span>Setujui / Kirim Akun</span>
+                              </button>
+                            </>
+                          )}
+
+                          {/* Tombol Cepat "Chat WhatsApp Pembeli" */}
+                          <button
+                            type="button"
+                            onClick={() => handleChatBuyer(conf)}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1 transition-all active:scale-95"
+                            title="Chat WhatsApp Pembeli untuk retur atau penyelesaian selisih"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>Chat WhatsApp Pembeli</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs text-slate-300">
             <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider font-bold border-b border-slate-800">
               <tr>
                 <th className="py-3 px-3 sm:px-4">ID &amp; Game</th>
@@ -1015,8 +1322,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </tr>
             </tfoot>
           </table>
+          )}
         </div>
       </div>
+
+      {/* Lightbox Bukti Transfer */}
+      {selectedProofLightbox && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn">
+          <div className="relative max-w-lg w-full bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <div className="flex justify-between items-center text-white">
+              <span className="font-bold text-xs">Foto Bukti Transfer Pembeli</span>
+              <button
+                onClick={() => setSelectedProofLightbox(null)}
+                className="p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="rounded-xl overflow-hidden max-h-[70vh] bg-black flex items-center justify-center">
+              <img
+                src={selectedProofLightbox}
+                alt="Bukti Transfer"
+                className="max-w-full max-h-[70vh] object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Settings & Order Approval Modal */}
+      <PaymentSettingsModal
+        isOpen={isPaymentModalOpen}
+        onClose={() => setIsPaymentModalOpen(false)}
+        defaultTab={paymentModalTab}
+      />
 
       {/* Modal Input Transaksi Penjualan Baru */}
       {isAddSaleModalOpen && (

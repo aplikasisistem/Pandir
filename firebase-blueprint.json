@@ -132,6 +132,105 @@
         }
       },
       "required": ["id", "accountId", "accountTitle", "sellingPrice", "profit", "date"]
+    },
+    "PaymentSettings": {
+      "title": "PaymentSettings",
+      "description": "Konfigurasi metode pembayaran dinamis SeaBank & QRIS",
+      "type": "object",
+      "properties": {
+        "seabank_account_number": {
+          "type": "string",
+          "description": "Nomor rekening SeaBank admin"
+        },
+        "seabank_account_name": {
+          "type": "string",
+          "description": "Nama pemilik rekening SeaBank"
+        },
+        "seabank_is_active": {
+          "type": "boolean",
+          "description": "Status aktif metode SeaBank"
+        },
+        "qris_image_url": {
+          "type": "string",
+          "description": "URL gambar barcode QRIS merchant"
+        },
+        "qris_merchant_name": {
+          "type": "string",
+          "description": "Nama merchant QRIS"
+        },
+        "qris_max_amount": {
+          "type": "number",
+          "description": "Batas nominal maksimal pembayaran via QRIS"
+        },
+        "qris_is_active": {
+          "type": "boolean",
+          "description": "Status aktif metode QRIS"
+        },
+        "updated_at": {
+          "type": "number",
+          "description": "Timestamp pembaruan terakhir"
+        }
+      },
+      "required": ["seabank_account_number", "seabank_is_active", "qris_is_active"]
+    },
+    "OrderTransaction": {
+      "title": "OrderTransaction",
+      "description": "Pesanan pembelian akun game dari checkout pembeli dengan kode unik dan validasi nominal",
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string",
+          "description": "ID unik pesanan (e.g. ORD-123456)",
+          "maxLength": 64
+        },
+        "product_id": {
+          "type": "string",
+          "description": "ID akun game yang dipesan",
+          "maxLength": 64
+        },
+        "product_title": {
+          "type": "string",
+          "description": "Judul akun game"
+        },
+        "base_price": {
+          "type": "number",
+          "description": "Harga dasar akun"
+        },
+        "unique_code": {
+          "type": "number",
+          "description": "Kode unik 3 digit 100-999"
+        },
+        "total_amount": {
+          "type": "number",
+          "description": "Total tagihan resmi (base_price + unique_code)"
+        },
+        "claimed_amount": {
+          "type": "number",
+          "description": "Nominal yang ditransfer pembeli"
+        },
+        "proof_of_payment_url": {
+          "type": "string",
+          "description": "URL bukti transfer"
+        },
+        "sender_name": {
+          "type": "string",
+          "description": "Nama pemilik rekening pengirim"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status approval pesanan",
+          "enum": ["PENDING", "PAID_APPROVED", "REJECTED_UNDERPAID", "CANCELLED", "MENUNGGU_VERIFIKASI", "TERVERIFIKASI", "DITOLAK"]
+        },
+        "created_at": {
+          "type": "number",
+          "description": "Waktu checkout pesanan dibuat"
+        },
+        "updated_at": {
+          "type": "number",
+          "description": "Waktu status terakhir diperbarui"
+        }
+      },
+      "required": ["order_id", "product_id", "base_price", "unique_code", "total_amount", "claimed_amount", "sender_name", "status"]
     }
   },
   "firestore": {
@@ -146,6 +245,18 @@
         "$ref": "#/entities/SaleRecord"
       },
       "description": "Koleksi riwayat transaksi penjualan"
+    },
+    "/pengaturan_pembayaran/{configId}": {
+      "schema": {
+        "$ref": "#/entities/PaymentSettings"
+      },
+      "description": "Koleksi konfigurasi pembayaran rekening SeaBank & QRIS dinamis"
+    },
+    "/konfirmasi_pembayaran/{orderId}": {
+      "schema": {
+        "$ref": "#/entities/OrderTransaction"
+      },
+      "description": "Koleksi transaksi pesanan dan konfirmasi bukti bayar pembeli"
     }
   }
 }
